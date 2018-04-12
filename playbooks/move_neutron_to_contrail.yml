@@ -1,0 +1,178 @@
+---
+- name: Add hosts from config/instances.yaml file
+  hosts: localhost
+  vars_files:
+  - "{{ hostvars['localhost'].config_file }}"
+  tasks:
+     - name: add bms contrail controller hosts
+       add_host:
+           hostname: "{{ item.value.ip }}"
+           groupname: contrail-controllers
+           ansible_user: "{{ provider_config.bms.ssh_user|default(item.value.ssh_user) }}"
+           ansible_ssh_pass: "{{ provider_config.bms.ssh_pwd|default(item.value.ssh_pwd) }}"
+           ansible_become: true
+           instance_name: "{{ item.key }}"
+           private_ip: "{{ item.value.ip }}"
+       when: item.value.provider=='bms' and (provider_config.bms.ssh_pwd is defined or
+             item.value.ssh_pwd is defined) and (item.value.roles is defined) and
+             ("config" in item.value.roles)
+       with_dict: "{{ instances }}"
+
+     - name: add bms compute hosts
+       add_host:
+           hostname: "{{ item.value.ip }}"
+           groupname: contrail-compute
+           ansible_user: "{{ provider_config.bms.ssh_user|default(item.value.ssh_user) }}"
+           ansible_ssh_pass: "{{ provider_config.bms.ssh_pwd|default(item.value.ssh_pwd) }}"
+           ansible_become: true
+           instance_name: "{{ item.key }}"
+           private_ip: "{{ item.value.ip }}"
+       when: item.value.provider=='bms' and (provider_config.bms.ssh_pwd is defined or
+             item.value.ssh_pwd is defined) and (item.value.roles is defined) and
+             ("vrouter" in item.value.roles)
+       with_dict: "{{ instances }}"
+
+     - name: add bms openstack hosts
+       add_host:
+           hostname: "{{ item.value.ip }}"
+           groupname: openstack-controllers
+           ansible_user: "{{ provider_config.bms.ssh_user|default(item.value.ssh_user) }}"
+           ansible_ssh_pass: "{{ provider_config.bms.ssh_pwd|default(item.value.ssh_pwd) }}"
+           ansible_become: true
+           instance_name: "{{ item.key }}"
+           private_ip: "{{ item.value.ip }}"
+       when: item.value.provider=='bms' and (provider_config.bms.ssh_pwd is defined or
+             item.value.ssh_pwd is defined) and (item.value.roles is defined) and
+             ("openstack" in item.value.roles)
+       with_dict: "{{ instances }}"
+
+     - name: gather global information
+       set_fact:
+           container_docker_registry: "{{ CONTAINER_REGISTRY }}"
+           container_docker_tag: "{{ contrail_configuration.CONTRAIL_VERSION }}"
+           keystone_admin_user: "{{ contrail_configuration.KEYSTONE_AUTH_ADMIN_USER }}"
+           keystone_admin_password: "{{ contrail_configuration.KEYSTONE_AUTH_ADMIN_PASSWORD }}"
+
+
+- name: Install Contrail plugin
+  hosts: openstack-controllers
+  vars:
+    #- openstack_ip: "{{ groups['openstack-controllers'][0] }}"
+    #- auth_token_url: "http://{{ openstack_ip }}:35357/v2.0/tokens"
+    - neutron_container: "bootstrap_neutron_opencontrail_plugin"
+    - neutron_plugin_image: "{{ hostvars['localhost'].container_docker_registry }}/contrail-openstack-neutron-init:{{ hostvars['localhost'].container_docker_tag }}"
+  tasks:
+    - name: Initial Neutron Contrail plugin
+      shell: docker run -d --rm --name {{ neutron_container }} --network="host" -v /usr/lib/python2.7:/opt/plugin {{ neutron_plugin_image }}
+
+    - name: set Contrail core plugin in neutron.conf
+      replace:
+          path: /etc/neutron/neutron.conf
+          regexp: '^core_plugin=.*'
+          replace: 'core_plugin=neutron_plugin_contrail.plugins.opencontrail.contrail_plugin.NeutronPluginContrailCoreV2'
+
+    - name: set service plugins in neutron.conf
+      replace:
+          path: /etc/neutron/neutron.conf
+          regexp: '^service_plugins=.*'
+          replace: 'service_plugins=neutron_plugin_contrail.plugins.opencontrail.loadbalancer.v2.plugin.LoadBalancerPluginV2'
+
+    - name: set api extension path
+      replace:
+          path: /etc/neutron/neutron.conf
+          regexp: '.*api_extensions_path.*'
+          replace: 'api_extensions_path = /usr/lib/python2.7/site-packages/neutron_plugin_contrail/extensions:/usr/lib/python2.7/site-packages/neutron_lbaas/extensions'
+
+    #- name: set quota driver
+    #  replace:
+    #      path: /etc/neutron/neutron.conf
+    #      regexp: '.*quota_driver.*'
+    #      replace: 'neutron_plugin_contrail.plugins.opencontrail.quota.driver.QuotaDriver'
+
+    - name: Create Neutron Contrail plugin directory
+      file:
+          path: /etc/neutron/plugins/opencontrail
+          owner: neutron
+          group: neutron
+          state: directory
+
+    - name: Generate ContrailPlugin.ini
+      vars:
+          admin_user: "{{ hostvars['localhost'].keystone_admin_user }}"
+          admin_password: "{{ hostvars['localhost'].keystone_admin_password }}"
+      template:
+          src: ../ContrailPlugin.ini.j2
+          dest: /etc/neutron/plugins/opencontrail/ContrailPlugin.ini
+          owner: neutron
+          group: neutron
+
+    - name: create plugin.ini
+      file:
+          src: /etc/neutron/plugins/opencontrail/ContrailPlugin.ini
+          dest: /etc/neutron/plugin.ini
+          owner: neutron
+          group: neutron
+          state: link
+
+    - name: restart neutron in the controller host
+      shell: "service neutron-server restart"
+
+    - name: set service_metadata_proxy in nova.conf
+      replace:
+          path: /etc/nova/nova.conf
+          regexp: 'service_metadata_proxy.*false' 
+          replace: 'service_metadata_proxy = true'
+          backup: yes
+
+    - name: set metadata_proxy_shared_secret in nova.conf
+      replace:
+          path: /etc/nova/nova.conf
+          regexp: 'metadata_proxy_shared_secret.*='
+          replace: 'metadata_proxy_shared_secret = contrail'
+
+    - name: restart nova services on Openstack node
+      service:
+          name: "{{ item }}"
+          state: restarted
+      with_items:
+          - openstack-nova-api
+          - openstack-nova-conductor
+          - openstack-nova-scheduler
+          - openstack-nova-consoleauth
+
+- name: Set up nova.conf on compute node
+  hosts: contrail-compute       
+  vars:
+    - nova_contrail: "bootstrap_nova_compute_opencontrail_plugin"
+    - nova_compute_opencontrail_image: "{{ hostvars['localhost'].container_docker_registry }}/contrail-openstack-compute-init:{{ hostvars['localhost'].container_docker_tag }}"
+  tasks:
+    - name: Initial Nova Contrail
+      shell: docker run -d --rm --name {{ nova_contrail }} --network="host" -v /usr/lib/python2.7:/opt/plugin {{ nova_compute_opencontrail_image }}
+
+    - name: set service_metadata_proxy
+      replace:
+          path: /etc/nova/nova.conf
+          regexp: 'service_metadata_proxy.*false'
+          replace: 'service_metadata_proxy = true'
+          backup: yes
+
+    - name: set metadata_proxy_shared_secret
+      replace:
+          path: /etc/nova/nova.conf
+          regexp: 'metadata_proxy_shared_secret.*='
+          replace: 'metadata_proxy_shared_secret = contrail'
+
+    - name: restart nova compute on compute node
+      service:
+          name: openstack-nova-compute
+          state: restarted
+
+- name: Some fixup on compute node 
+  hosts: contrail-compute
+  tasks:
+    - name: obtain the name of the vrouter agent container
+      shell: docker ps --filter name=vrouter-agent-dpdk --format {{ '{{' }}.Names{{ '}}' }}
+      register: vrouter_container
+
+    - name: fixup copy /usr/bin/vrouter-port-control from the vrouter_agent container to the compute host
+      shell: docker cp {{ vrouter_container.stdout }}:/usr/bin/vrouter-port-control /usr/bin/vrouter-port-control
