@@ -1,9 +1,48 @@
+CONTAINER_REGISTRY: 10.240.235.32:6666
+REGISTRY_PRIVATE_INSECURE: True
 provider_config:
   bms:
+    ssh_pwd: contrail123
+    ssh_user: root
+    ntpserver: pool.ntp.org
+    domainsuffix: local
 instances:
   bms1:
     provider: bms
-    ip: 192.168.1.100
+    ip: 10.240.235.86
+    roles:
+      config_database:
+      config:
+      control:
+      webui:
+      analytics:
+      analytics_database:
+  bms2:
+    provider: bms
+    ip: 10.240.235.87
+    roles:
+      vrouter:
+            AGENT_MODE: dpdk
+  bms3:
+    provider: bms
+    ip: 10.240.235.88
+    roles:
+      vrouter:
+            AGENT_MODE: dpdk
+  bms4:
+    provider: bms
+    ip: 10.240.235.85
+    roles:
+      openstack:
 contrail_configuration:
-  CONTAINER_REGISTRY: michaelhenkel
-  CONTRAIL_VERSION: ocata-5.0-20180219195722
+  CONTAINER_REGISTRY: 10.240.235.32:6666
+  CONTRAIL_VERSION: newton-dev
+  CLOUD_ORCHESTRATOR: openstack
+  VROUTER_GATEWAY: 10.10.10.1
+  RABBITMQ_NODE_PORT: 5673
+  PHYSICAL_INTERFACE: eth1
+  AUTH_MODE: keystone
+  KEYSTONE_AUTH_HOST: 10.240.235.85 
+  KEYSTONE_AUTH_URL_VERSION: /v3
+  KEYSTONE_AUTH_ADMIN_USER: admin
+  KEYSTONE_AUTH_ADMIN_PASSWORD: admin

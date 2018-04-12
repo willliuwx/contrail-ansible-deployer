@@ -23,10 +23,10 @@
   tags:
   - k8s
 
-- include: install_kolla.yml
-  when:
-    - orchestrator == 'openstack'
-    - skip_openstack is not defined or not skip_openstack|bool
+#- include: install_kolla.yml
+#  when:
+#    - orchestrator == 'openstack'
+#    - skip_openstack is not defined or not skip_openstack|bool
 
 - name: Install Contrail
   hosts: container_hosts

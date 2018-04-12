@@ -34,10 +34,10 @@
     gpgkey: https://yum.dockerproject.org/gpg
     gpgcheck: yes
 
-- name: install docker selinux
-  yum:
-    name: docker-engine-selinux-17.03.1.ce
-    state: installed
+#- name: install docker selinux
+#  yum:
+#    name: docker-engine-selinux-17.03.1.ce
+#    state: installed
 
 - name: install docker
   yum:
